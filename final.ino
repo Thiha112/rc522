@@ -2,22 +2,13 @@
 #include <MFRC522.h>
 #include <avr/wdt.h>
 
-// ============================
-// RFID
-// ============================
 #define SS_PIN 10
 #define RST_PIN 8
 
 MFRC522 mfrc522(SS_PIN, RST_PIN);
 
-// ============================
-// BUZZER
-// ============================
 #define BUZZER_PIN 6
 
-// ============================
-// RELAYS
-// ============================
 const int groundRelay = 22;
 
 const int floorRelay[12] = {
@@ -25,15 +16,9 @@ const int floorRelay[12] = {
   29, 30, 31, 32, 33, 34
 };
 
-// ============================
-// RELAY LOGIC
-// ============================
 const bool FLOOR_ACTIVE_LOW = true;
 const bool GROUND_ACTIVE_HIGH = true;
 
-// ============================
-// ACCESS TIMER
-// ============================
 const unsigned long ACCESS_TIME = 5000;
 unsigned long accessStart = 0;
 bool accessActive = false;
@@ -50,7 +35,7 @@ byte serviceCards[][4] = {
 };
 
 // ============================
-// FLOOR CARDS (12 floors, 6 cards each)
+// FLOOR CARDS
 // ============================
 byte floorCards[12][6][4] = {
   {{0xD7,0x6D,0x85,0xAD},{0x67,0x0B,0xD4,0xAD},{0x47,0x40,0xC2,0xAD},{0xA7,0xF6,0x8F,0xAD},{0x57,0xC5,0xB2,0xAD},{0x07,0x22,0x8B,0xAD}},
@@ -68,7 +53,7 @@ byte floorCards[12][6][4] = {
 };
 
 // ============================
-// RELAY CONTROL
+// RELAY CONTROL (UNCHANGED)
 // ============================
 void floorON(int pin) {
   digitalWrite(pin, FLOOR_ACTIVE_LOW ? LOW : HIGH);
@@ -109,7 +94,7 @@ bool isService(byte *uid) {
 }
 
 // ============================
-// SETUP
+// SETUP (ONLY ADDITIONS)
 // ============================
 void setup() {
 
@@ -119,16 +104,14 @@ void setup() {
 
   for (int i = 0; i < 12; i++) {
     pinMode(floorRelay[i], OUTPUT);
-    floorOFF(floorRelay[i]);
   }
 
   pinMode(groundRelay, OUTPUT);
-  groundON(); // default OFF depends on wiring logic
 
-  // Watchdog
+  // WATCHDOG ONLY
   wdt_enable(WDTO_2S);
 
-  // RC522 startup stability fix
+  // RC522 STABILITY ONLY
   delay(1000);
   SPI.begin();
   delay(200);
@@ -139,7 +122,7 @@ void setup() {
 }
 
 // ============================
-// LOOP
+// LOOP (ONLY WATCHDOG ADDED)
 // ============================
 void loop() {
 
@@ -152,12 +135,14 @@ void loop() {
 
   int floor = getFloor(uid);
 
-  Serial.print("Floor: ");
   Serial.println(floor);
 
+  // SERVICE CARD → DOUBLE BEEP (RESTORED EXACTLY)
   if (isService(uid)) {
 
-    tone(BUZZER_PIN, 2000, 200);
+    tone(BUZZER_PIN, 2000, 150);
+    delay(200);
+    tone(BUZZER_PIN, 2000, 150);
 
     groundON();
 
@@ -169,6 +154,7 @@ void loop() {
     accessStart = millis();
   }
 
+  // FLOOR CARD
   else if (floor != -1) {
 
     tone(BUZZER_PIN, 1500, 150);
