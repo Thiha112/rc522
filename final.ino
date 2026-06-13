@@ -11,7 +11,7 @@
 MFRC522 mfrc522(SS_PIN, RST_PIN);
 
 // ============================
-// BUZZER (optional if already used, safe to keep)
+// BUZZER
 // ============================
 #define BUZZER_PIN 6
 
@@ -26,20 +26,18 @@ const int floorRelay[12] = {
 };
 
 // ============================
-// RELAY TYPES
+// RELAY LOGIC
 // ============================
 const bool FLOOR_ACTIVE_LOW = true;
 const bool GROUND_ACTIVE_HIGH = true;
 
 // ============================
-// STATE
+// ACCESS TIMER
 // ============================
 const unsigned long ACCESS_TIME = 5000;
 unsigned long accessStart = 0;
 bool accessActive = false;
-
 int activeFloor = -1;
-bool serviceMode = false;
 
 // ============================
 // SERVICE CARDS
@@ -52,7 +50,7 @@ byte serviceCards[][4] = {
 };
 
 // ============================
-// FLOOR CARDS
+// FLOOR CARDS (12 floors, 6 cards each)
 // ============================
 byte floorCards[12][6][4] = {
   {{0xD7,0x6D,0x85,0xAD},{0x67,0x0B,0xD4,0xAD},{0x47,0x40,0xC2,0xAD},{0xA7,0xF6,0x8F,0xAD},{0x57,0xC5,0xB2,0xAD},{0x07,0x22,0x8B,0xAD}},
@@ -84,43 +82,8 @@ void groundON() {
   digitalWrite(groundRelay, GROUND_ACTIVE_HIGH ? HIGH : LOW);
 }
 
-void groundOFF() {
-  digitalWrite(groundRelay, GROUND_ACTIVE_HIGH ? LOW : HIGH);
-}
-
 // ============================
-// SAFE STATE
-// ============================
-void safeState() {
-
-  for (int i = 0; i < 12; i++) {
-    floorOFF(floorRelay[i]);
-  }
-
-  groundOFF();
-
-  accessActive = false;
-  serviceMode = false;
-  activeFloor = -1;
-
-  Serial.println("SAFE STATE");
-}
-
-// ============================
-// BUZZER
-// ============================
-void beep(int t) {
-  digitalWrite(BUZZER_PIN, HIGH);
-  delay(t);
-  digitalWrite(BUZZER_PIN, LOW);
-}
-
-void beepSuccess() { beep(100); }
-void beepService() { beep(100); delay(100); beep(100); }
-void beepError() { beep(500); }
-
-// ============================
-// UID MATCH
+// HELPERS
 // ============================
 bool matchUID(byte *a, byte *b) {
   for (byte i = 0; i < 4; i++) {
@@ -129,9 +92,6 @@ bool matchUID(byte *a, byte *b) {
   return true;
 }
 
-// ============================
-// FLOOR FIND
-// ============================
 int getFloor(byte *uid) {
   for (int f = 0; f < 12; f++) {
     for (int c = 0; c < 6; c++) {
@@ -141,9 +101,6 @@ int getFloor(byte *uid) {
   return -1;
 }
 
-// ============================
-// SERVICE CHECK
-// ============================
 bool isService(byte *uid) {
   for (int i = 0; i < 4; i++) {
     if (matchUID(uid, serviceCards[i])) return true;
@@ -162,22 +119,21 @@ void setup() {
 
   for (int i = 0; i < 12; i++) {
     pinMode(floorRelay[i], OUTPUT);
+    floorOFF(floorRelay[i]);
   }
 
   pinMode(groundRelay, OUTPUT);
+  groundON(); // default OFF depends on wiring logic
 
-  safeState();
-
-  // WATCHDOG
+  // Watchdog
   wdt_enable(WDTO_2S);
 
-  // RC522 POWER STABILITY DELAY
+  // RC522 startup stability fix
   delay(1000);
   SPI.begin();
   delay(200);
-
   mfrc522.PCD_Init();
-  delay(100);
+  delay(50);
 
   Serial.println("SYSTEM READY");
 }
@@ -189,13 +145,6 @@ void loop() {
 
   wdt_reset();
 
-  // periodic RFID recovery
-  static unsigned long rfidFix = 0;
-  if (millis() - rfidFix > 10000) {
-    mfrc522.PCD_Init();
-    rfidFix = millis();
-  }
-
   if (!mfrc522.PICC_IsNewCardPresent()) return;
   if (!mfrc522.PICC_ReadCardSerial()) return;
 
@@ -203,38 +152,34 @@ void loop() {
 
   int floor = getFloor(uid);
 
+  Serial.print("Floor: ");
+  Serial.println(floor);
+
   if (isService(uid)) {
 
-    beepService();
+    tone(BUZZER_PIN, 2000, 200);
+
     groundON();
 
     for (int i = 0; i < 12; i++) {
       floorON(floorRelay[i]);
     }
 
-    serviceMode = true;
     accessActive = true;
+    accessStart = millis();
   }
 
   else if (floor != -1) {
 
-    beepSuccess();
+    tone(BUZZER_PIN, 1500, 150);
 
     groundON();
     floorON(floorRelay[floor]);
 
     activeFloor = floor;
     accessActive = true;
+    accessStart = millis();
   }
-
-  else {
-
-    beepError();
-    safeState();
-    return;
-  }
-
-  accessStart = millis();
 
   mfrc522.PICC_HaltA();
   mfrc522.PCD_StopCrypto1();
