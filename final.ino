@@ -7,8 +7,14 @@
 
 MFRC522 mfrc522(SS_PIN, RST_PIN);
 
+// ============================
+// BUZZER
+// ============================
 #define BUZZER_PIN 6
 
+// ============================
+// RELAY PINS
+// ============================
 const int groundRelay = 22;
 
 const int floorRelay[12] = {
@@ -16,18 +22,27 @@ const int floorRelay[12] = {
   29, 30, 31, 32, 33, 34
 };
 
+// ============================
+// RELAY TYPES (UNCHANGED LOGIC)
+// ============================
 const bool FLOOR_ACTIVE_LOW = true;
 const bool GROUND_ACTIVE_HIGH = true;
 
-const unsigned long ACCESS_TIME = 5000;
+// ============================
+// ACCESS TIMER
+// ============================
+const unsigned long ACCESS_TIME = 3000;
 unsigned long accessStart = 0;
 bool accessActive = false;
+
 int activeFloor = -1;
+bool serviceMode = false;
 
 // ============================
 // SERVICE CARDS
 // ============================
-byte serviceCards[][4] = {
+byte serviceCards[][5] = {
+  {0x82,0x50,0x41,0x20},
   {0x47,0xC6,0xBE,0xAD},
   {0xE7,0xD3,0xB0,0xAD},
   {0x97,0xE2,0x75,0xAD},
@@ -37,6 +52,7 @@ byte serviceCards[][4] = {
 // ============================
 // FLOOR CARDS
 // ============================
+
 byte floorCards[12][6][4] = {
   {{0xD7,0x6D,0x85,0xAD},{0x67,0x0B,0xD4,0xAD},{0x47,0x40,0xC2,0xAD},{0xA7,0xF6,0x8F,0xAD},{0x57,0xC5,0xB2,0xAD},{0x07,0x22,0x8B,0xAD}},
   {{0x73,0xF2,0x8E,0x05},{0x79,0x3C,0x8F,0x05},{0xEC,0x51,0x8E,0x05},{0x27,0xFE,0x89,0xAD},{0xE7,0x78,0xA8,0xAD},{0x67,0xC7,0x69,0xAD}},
@@ -53,22 +69,63 @@ byte floorCards[12][6][4] = {
 };
 
 // ============================
-// RELAY CONTROL (UNCHANGED)
+// RELAY CONTROL FUNCTIONS (UNCHANGED)
 // ============================
 void floorON(int pin) {
-  digitalWrite(pin, FLOOR_ACTIVE_LOW ? LOW : HIGH);
+  if (FLOOR_ACTIVE_LOW)
+    digitalWrite(pin, HIGH);
+  else
+    digitalWrite(pin, LOW);
 }
 
 void floorOFF(int pin) {
-  digitalWrite(pin, FLOOR_ACTIVE_LOW ? HIGH : LOW);
+  if (FLOOR_ACTIVE_LOW)
+    digitalWrite(pin, LOW);
+  else
+    digitalWrite(pin, HIGH);
 }
 
 void groundON() {
-  digitalWrite(groundRelay, GROUND_ACTIVE_HIGH ? HIGH : LOW);
+  if (GROUND_ACTIVE_HIGH)
+    digitalWrite(groundRelay, LOW);
+  else
+    digitalWrite(groundRelay, HIGH);
+}
+
+void groundOFF() {
+  if (GROUND_ACTIVE_HIGH)
+    digitalWrite(groundRelay, HIGH);
+  else
+    digitalWrite(groundRelay, LOW);
 }
 
 // ============================
-// HELPERS
+// BUZZER FUNCTIONS (ADDED ONLY)
+// ============================
+void beep(int t) {
+  digitalWrite(BUZZER_PIN, HIGH);
+  delay(t);
+  digitalWrite(BUZZER_PIN, LOW);
+}
+
+void beepSuccess() {
+  beep(100);
+}
+
+void beepService() {
+  beep(100);
+  delay(100);
+  beep(100);
+}
+
+void beepError() {
+  digitalWrite(BUZZER_PIN, HIGH);
+  delay(600);
+  digitalWrite(BUZZER_PIN, LOW);
+}
+
+// ============================
+// UID MATCH
 // ============================
 bool matchUID(byte *a, byte *b) {
   for (byte i = 0; i < 4; i++) {
@@ -77,15 +134,23 @@ bool matchUID(byte *a, byte *b) {
   return true;
 }
 
+// ============================
+// FIND FLOOR
+// ============================
 int getFloor(byte *uid) {
   for (int f = 0; f < 12; f++) {
     for (int c = 0; c < 6; c++) {
-      if (matchUID(uid, floorCards[f][c])) return f;
+      if (matchUID(uid, floorCards[f][c])) {
+        return f;
+      }
     }
   }
   return -1;
 }
 
+// ============================
+// SERVICE CHECK
+// ============================
 bool isService(byte *uid) {
   for (int i = 0; i < 4; i++) {
     if (matchUID(uid, serviceCards[i])) return true;
@@ -94,39 +159,64 @@ bool isService(byte *uid) {
 }
 
 // ============================
-// SETUP (ONLY ADDITIONS)
+// SETUP
 // ============================
 void setup() {
-
   Serial.begin(9600);
 
+  delay(10000);
+
   pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(BUZZER_PIN, LOW);
+
+  pinMode(groundRelay, OUTPUT);
+  groundOFF();
 
   for (int i = 0; i < 12; i++) {
     pinMode(floorRelay[i], OUTPUT);
+    floorOFF(floorRelay[i]);
   }
-
-  pinMode(groundRelay, OUTPUT);
 
   // WATCHDOG ONLY
   wdt_enable(WDTO_2S);
 
   // RC522 STABILITY ONLY
-  delay(1000);
+  pinMode(RST_PIN,OUTPUT);
+
+  digitalWrite(RST_PIN,LOW);
+  delay(100);
+
+  digitalWrite(RST_PIN,HIGH);
+  delay(100);
+  SPI.begin();
+
   SPI.begin();
   delay(200);
   mfrc522.PCD_Init();
-  delay(50);
+  delay(200);
 
-  Serial.println("SYSTEM READY");
+  Serial.println("ELEVATOR READY");
 }
 
 // ============================
-// LOOP (ONLY WATCHDOG ADDED)
+// LOOP
 // ============================
 void loop() {
-
   wdt_reset();
+  if (accessActive && millis() - accessStart > ACCESS_TIME) {
+
+    groundOFF();
+
+    for (int i = 0; i < 12; i++) {
+      floorOFF(floorRelay[i]);
+    }
+
+    accessActive = false;
+    serviceMode = false;
+    activeFloor = -1;
+
+    Serial.println("ACCESS EXPIRED");
+  }
 
   if (!mfrc522.PICC_IsNewCardPresent()) return;
   if (!mfrc522.PICC_ReadCardSerial()) return;
@@ -135,14 +225,10 @@ void loop() {
 
   int floor = getFloor(uid);
 
-  Serial.println(floor);
-
-  // SERVICE CARD → DOUBLE BEEP (RESTORED EXACTLY)
   if (isService(uid)) {
 
-    tone(BUZZER_PIN, 2000, 150);
-    delay(200);
-    tone(BUZZER_PIN, 2000, 150);
+    Serial.println("SERVICE MODE");
+    beepService();
 
     groundON();
 
@@ -150,22 +236,29 @@ void loop() {
       floorON(floorRelay[i]);
     }
 
-    accessActive = true;
-    accessStart = millis();
+    serviceMode = true;
   }
-
-  // FLOOR CARD
   else if (floor != -1) {
 
-    tone(BUZZER_PIN, 1500, 150);
+    Serial.print("FLOOR ACCESS: ");
+    Serial.println(floor + 1);
+
+    beepSuccess();
 
     groundON();
     floorON(floorRelay[floor]);
 
     activeFloor = floor;
-    accessActive = true;
-    accessStart = millis();
   }
+  else {
+
+    Serial.println("ACCESS DENIED");
+    beepError();
+    return;
+  }
+
+  accessActive = true;
+  accessStart = millis();
 
   mfrc522.PICC_HaltA();
   mfrc522.PCD_StopCrypto1();
